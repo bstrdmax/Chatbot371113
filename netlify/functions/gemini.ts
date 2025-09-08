@@ -1,6 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import type { HandlerEvent, HandlerContext } from "@netlify/functions";
-import type { Part } from '@google/genai';
+import type { Part, Content } from '@google/genai';
 
 // Interface for messages sent from the client's history
 interface HistoryMessage {
@@ -42,31 +42,33 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
     
     const systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. When provided with context, you must use it to tailor your responses. All your responses should be formatted in markdown.`;
     
-    // Reconstruct history for the API, converting from the client's format.
-    const history: { role: 'user' | 'model'; parts: Part[] }[] = [];
+    // Reconstruct conversation history (`contents`) for the API call.
+    const contents: Content[] = [];
 
     // Prepend context if it exists (only on the first message from the user)
     if (companyContext) {
-        history.push(
+        contents.push(
             { role: 'user', parts: [{ text: `CONTEXT:\n${companyContext}` }] },
             { role: 'model', parts: [{ text: 'Context acknowledged. I will refer to it in my responses.' }] }
         );
     }
 
-    // Add the rest of the chat history from the client
+    // Add the rest of the chat history from the client.
     clientHistory.forEach((msg: HistoryMessage) => {
-        history.push({ role: msg.role, parts: [{ text: msg.content }] });
+        contents.push({ role: msg.role, parts: [{ text: msg.content }] });
     });
+    
+    // Add the new user message to the end of the contents
+    contents.push({ role: 'user', parts: [{ text: message }] });
 
-    const chat = ai.chats.create({
+    // Use the stateless `generateContentStream` method.
+    const stream = await ai.models.generateContentStream({
         model: 'gemini-2.5-flash',
-        history,
+        contents,
         config: { systemInstruction },
     });
 
-    // Send the user's new message and stream the response
-    const stream = await chat.sendMessageStream({ message });
-
+    // Stream the response back to the client
     for await (const chunk of stream) {
       const text = chunk.text;
       if (text) {
