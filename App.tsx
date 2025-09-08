@@ -246,7 +246,6 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isParsing, setIsParsing] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
   const [input, setInput] = useState<string>('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   
@@ -268,7 +267,6 @@ function App() {
         alert(`File "${file.name}" has already been uploaded.`);
         return;
     }
-    setError(null);
     setIsParsing(true);
     
     let extractedText = '';
@@ -295,7 +293,7 @@ function App() {
       setUploadedFiles(prev => [...prev, { name: file.name, content: extractedText }]);
     } catch (e) {
       const parseError = e instanceof Error ? e.message : 'An unknown error occurred during file parsing.';
-      setError(`Failed to parse file: ${parseError}`);
+      alert(`Failed to parse file: ${parseError}`);
     } finally {
       setIsParsing(false);
     }
@@ -306,7 +304,6 @@ function App() {
   };
   
   const handleStartChat = () => {
-    setError(null);
     setMessages([
         {
             role: Role.Model,
@@ -319,7 +316,6 @@ function App() {
     setCompanyContext('');
     setUploadedFiles([]);
     setMessages([]);
-    setError(null);
   };
 
   const handleSend = async () => {
@@ -331,11 +327,9 @@ function App() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
-    setError(null);
     
     try {
         // The API history should not include the initial bot greeting.
-        // It should only contain the real back-and-forth conversation.
         const historyForApi = isFirstUserMessage ? [] : messages.slice(1);
 
         const requestBody = {
@@ -409,7 +403,6 @@ function App() {
     } catch (e) {
       console.error(e);
       const errorMessage = e instanceof Error ? e.message : 'Failed to get a response.';
-      setError(errorMessage);
        setMessages(prev => [...prev, { role: Role.Model, content: `Error: ${errorMessage}` }]);
     } finally {
       setIsLoading(false);
@@ -458,7 +451,6 @@ function App() {
                   </div>
               </div>
             )}
-             {error && <p className="text-red-500 text-center my-4">Error: {error}</p>}
             <div ref={chatEndRef} />
           </div>
         </main>
