@@ -12,17 +12,13 @@ const createSessionId = () => `session_${Date.now()}_${Math.random().toString(36
 export const handler = async function* (event: HandlerEvent, context: HandlerContext) {
   if (event.httpMethod !== 'POST') {
     yield JSON.stringify({ error: 'Method Not Allowed' });
-    return {
-      statusCode: 405,
-    };
+    return;
   }
 
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
     yield JSON.stringify({ error: 'API_KEY is not set on the server.' });
-    return {
-      statusCode: 500,
-    };
+    return;
   }
   
   try {
@@ -32,7 +28,7 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
 
     if (typeof message !== 'string') {
         yield JSON.stringify({ error: 'Message must be a string.' });
-        return { statusCode: 400 };
+        return;
     }
 
     const ai = new GoogleGenAI({ apiKey });
@@ -64,15 +60,12 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
             message: initialMessage,
         });
 
-        return {
-            statusCode: 200,
-            headers: { 'Content-Type': 'application/json' },
-        };
+        return;
     } else {
         chat = chatSessions.get(sessionId);
         if (!chat) {
             yield JSON.stringify({ error: 'Chat session not found.' });
-            return { statusCode: 404 };
+            return;
         }
     }
 
@@ -88,8 +81,5 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
   } catch (error) {
     console.error('Error processing request:', error);
     yield JSON.stringify({ error: error instanceof Error ? error.message : 'An internal server error occurred.' });
-    return {
-      statusCode: 500,
-    };
   }
 };
