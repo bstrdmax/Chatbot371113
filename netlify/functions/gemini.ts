@@ -43,7 +43,6 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
     let systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. When provided with context, you must use it to tailor your responses. All your responses should be formatted in markdown.`;
     
     // Append company context to the system instruction if provided.
-    // This is more efficient than adding it to the message history on every turn.
     if (companyContext) {
       systemInstruction += `\n\nRefer to the following context when answering:\nCONTEXT:\n${companyContext}`;
     }
@@ -59,11 +58,22 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
     // Add the new user message to the end of the contents
     contents.push({ role: 'user', parts: [{ text: message }] });
 
+    // Define the generation config
+    const config: { systemInstruction: string; thinkingConfig?: { thinkingBudget: number } } = {
+        systemInstruction,
+    };
+
+    // For the first message that includes large context, disable the thinking budget
+    // to get a faster initial response and avoid serverless function timeouts.
+    if (companyContext) {
+        config.thinkingConfig = { thinkingBudget: 0 };
+    }
+
     // Use the stateless `generateContentStream` method.
     const stream = await ai.models.generateContentStream({
         model: 'gemini-2.5-flash',
         contents,
-        config: { systemInstruction },
+        config,
     });
 
     // Stream the response back to the client
