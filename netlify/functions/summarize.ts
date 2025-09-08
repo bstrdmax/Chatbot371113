@@ -27,11 +27,17 @@ export const handler: Handler = async (event, context) => {
 
     const ai = new GoogleGenAI({ apiKey });
 
-    const prompt = `Please act as an expert document analyst. Summarize the following text for a risk management expert. Extract only the most critical information, key risks, strategic goals, financial data, and major stakeholders mentioned. The summary must be dense, factual, and significantly shorter than the original, intended to be used as context for a chatbot. Do not include conversational fluff.
-    
-    DOCUMENT TEXT:
-    ---
-    ${companyContext}`;
+    const prompt = `Please act as an expert document analyst. Your task is to create a concise summary of the following text for a risk management expert.
+
+**Instructions:**
+1.  Extract **only** the most critical information: key risks, strategic goals, core financial data, and major stakeholders mentioned.
+2.  The summary **must be dense, factual, and under 1500 words.**
+3.  The purpose of this summary is to be used as context for a chatbot, so it must be significantly shorter than the original.
+4.  Omit all conversational fluff, introductions, and conclusions that don't add factual value.
+
+DOCUMENT TEXT:
+---
+${companyContext}`;
 
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
