@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/ai';
+import { GoogleGenAI } from '@google/genai';
 import type { Handler, HandlerResponse } from "@netlify/functions";
 
 const createResponse = (statusCode: number, body: object): HandlerResponse => ({
