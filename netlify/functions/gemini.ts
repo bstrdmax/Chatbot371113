@@ -2,22 +2,26 @@ import { GoogleGenAI, Chat } from '@google/genai';
 import type { HandlerEvent, HandlerContext } from "@netlify/functions";
 
 // A persistent store for chat sessions, mapping a unique ID to a Chat instance.
-// In a real-world scenario, you might use a more robust storage solution
-// like a database or a Redis cache, but for this example, memory is fine.
 const chatSessions = new Map<string, Chat>();
 
 // Helper function to create a unique session ID
 const createSessionId = () => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
 export const handler = async function* (event: HandlerEvent, context: HandlerContext) {
+  const encoder = new TextEncoder();
+
+  const yieldError = (message: string) => {
+    return JSON.stringify({ type: 'error', message }) + '\n';
+  };
+
   if (event.httpMethod !== 'POST') {
-    yield JSON.stringify({ error: 'Method Not Allowed' });
+    yield yieldError('Method Not Allowed');
     return;
   }
 
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    yield JSON.stringify({ error: 'API_KEY is not set on the server.' });
+    yield yieldError('API_KEY is not set on the server.');
     return;
   }
   
@@ -25,16 +29,15 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
     const body = JSON.parse(event.body || '{}');
     const { message, context: companyContext, sessionId: existingSessionId } = body;
     let sessionId = existingSessionId;
+    let chat: Chat | undefined;
 
     if (typeof message !== 'string') {
-        yield JSON.stringify({ error: 'Message must be a string.' });
+        yield yieldError('Message must be a string.');
         return;
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    let chat: Chat | undefined;
-
-    // Check if we are starting a new chat or continuing one
+    
     if (message === 'START_CHAT_SESSION' || !sessionId || !chatSessions.has(sessionId)) {
         let systemInstruction: string;
         if (companyContext) {
@@ -56,17 +59,18 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
             : `I am ready to discuss general risk management and strategic planning. How can I assist you?`;
         
         yield JSON.stringify({
+            type: 'session',
             sessionId,
             message: initialMessage,
-        });
-
+        }) + '\n';
         return;
-    } else {
-        chat = chatSessions.get(sessionId);
-        if (!chat) {
-            yield JSON.stringify({ error: 'Chat session not found.' });
-            return;
-        }
+
+    } 
+    
+    chat = chatSessions.get(sessionId);
+    if (!chat) {
+        yield yieldError('Chat session not found. Please start a new chat.');
+        return;
     }
 
     const stream = await chat.sendMessageStream({ message });
@@ -74,12 +78,13 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
     for await (const chunk of stream) {
       const text = chunk.text;
       if (text) {
-         yield text;
+         yield JSON.stringify({ type: 'chunk', text }) + '\n';
       }
     }
     
   } catch (error) {
     console.error('Error processing request:', error);
-    yield JSON.stringify({ error: error instanceof Error ? error.message : 'An internal server error occurred.' });
+    const errorMessage = error instanceof Error ? error.message : 'An internal server error occurred.';
+    yield yieldError(errorMessage);
   }
 };
