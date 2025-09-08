@@ -40,20 +40,18 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
 
     const ai = new GoogleGenAI({ apiKey });
     
-    const systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. When provided with context, you must use it to tailor your responses. All your responses should be formatted in markdown.`;
+    let systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. When provided with context, you must use it to tailor your responses. All your responses should be formatted in markdown.`;
+    
+    // Append company context to the system instruction if provided.
+    // This is more efficient than adding it to the message history on every turn.
+    if (companyContext) {
+      systemInstruction += `\n\nRefer to the following context when answering:\nCONTEXT:\n${companyContext}`;
+    }
     
     // Reconstruct conversation history (`contents`) for the API call.
     const contents: Content[] = [];
 
-    // Prepend context if it exists (only on the first message from the user)
-    if (companyContext) {
-        contents.push(
-            { role: 'user', parts: [{ text: `CONTEXT:\n${companyContext}` }] },
-            { role: 'model', parts: [{ text: 'Context acknowledged. I will refer to it in my responses.' }] }
-        );
-    }
-
-    // Add the rest of the chat history from the client.
+    // Add the chat history from the client.
     clientHistory.forEach((msg: HistoryMessage) => {
         contents.push({ role: msg.role, parts: [{ text: msg.content }] });
     });
