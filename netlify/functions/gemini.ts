@@ -1,92 +1,75 @@
 import { GoogleGenAI } from '@google/genai';
-import type { HandlerEvent, HandlerContext } from "@netlify/functions";
-import type { Part, Content } from '@google/genai';
+import type { Handler, HandlerResponse } from "@netlify/functions";
 
-// Interface for messages sent from the client's history
-interface HistoryMessage {
-  role: 'user' | 'model';
-  content: string;
-}
+const createResponse = (statusCode: number, body: object): HandlerResponse => ({
+  statusCode,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
 
-const yieldError = (message: string) => {
-    return JSON.stringify({ type: 'error', message }) + '\n';
-};
-
-export const handler = async function* (event: HandlerEvent, context: HandlerContext) {
+export const handler: Handler = async (event, context) => {
   if (event.httpMethod !== 'POST') {
-    yield yieldError('Method Not Allowed');
-    return;
+    return createResponse(405, { message: 'Method Not Allowed' });
   }
 
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    yield yieldError('API_KEY is not set on the server.');
-    return;
+    return createResponse(500, { message: 'API_KEY is not set on the server.' });
   }
-  
+
   try {
     const body = JSON.parse(event.body || '{}');
-    const { message, context: companyContext, history: clientHistory } = body;
+    const { question, context: companyContext } = body;
 
-    if (typeof message !== 'string' || !message) {
-        yield yieldError('Message must be a non-empty string.');
-        return;
-    }
-
-    if (!Array.isArray(clientHistory)) {
-        yield yieldError('History must be an array.');
-        return;
+    if (typeof question !== 'string' || !question) {
+      return createResponse(400, { message: 'Question must be a non-empty string.' });
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    
-    let systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. When provided with context, you must use it to tailor your responses. All your responses should be formatted in markdown.`;
-    
-    // Append company context to the system instruction if provided.
-    if (companyContext) {
-      systemInstruction += `\n\nRefer to the following context when answering:\nCONTEXT:\n${companyContext}`;
-    }
-    
-    // Reconstruct conversation history (`contents`) for the API call.
-    const contents: Content[] = [];
+    const model = 'gemini-2.5-flash';
 
-    // Add the chat history from the client.
-    clientHistory.forEach((msg: HistoryMessage) => {
-        contents.push({ role: msg.role, parts: [{ text: msg.content }] });
-    });
+    const hasContext = typeof companyContext === 'string' && companyContext.trim().length > 0;
+
+    const systemInstruction = hasContext
+        ? `You are an expert AI assistant specializing in risk management and strategic planning. You will be given a context document and a question. Your task is to answer the question based *only* on the information provided in the context. Your answers should be professional, insightful, and directly reference the source material. Format your responses in markdown.`
+        : `You are an expert AI assistant specializing in risk management and strategic planning. Answer the user's questions with professional, insightful, and well-reasoned responses. Do not mention that you are an AI. Format your responses in markdown.`;
     
-    // Add the new user message to the end of the contents
-    contents.push({ role: 'user', parts: [{ text: message }] });
+    const promptText = hasContext
+        ? `CONTEXT:\n---\n${companyContext}\n---\n\nQUESTION: ${question}`
+        : question;
+    
+    const contents = [
+        {
+            role: 'user',
+            parts: [{ text: promptText }]
+        }
+    ];
 
-    // Define the generation config
-    const config: { systemInstruction: string; thinkingConfig?: { thinkingBudget: number } } = {
-        systemInstruction,
-    };
+    const config = hasContext
+        ? {
+            systemInstruction,
+            thinkingConfig: { thinkingBudget: 0 },
+            temperature: 0.3,
+        }
+        : {
+            systemInstruction,
+            temperature: 0.7,
+        };
 
-    // For the first message that includes large context, disable the thinking budget
-    // to get a faster initial response and avoid serverless function timeouts.
-    if (companyContext) {
-        config.thinkingConfig = { thinkingBudget: 0 };
-    }
 
-    // Use the stateless `generateContentStream` method.
-    const stream = await ai.models.generateContentStream({
-        model: 'gemini-2.5-flash',
+    const response = await ai.models.generateContent({
+        model,
         contents,
         config,
     });
 
-    // Stream the response back to the client
-    for await (const chunk of stream) {
-      const text = chunk.text;
-      if (text) {
-         yield JSON.stringify({ type: 'chunk', text }) + '\n';
-      }
-    }
+    const answer = response.text;
     
+    return createResponse(200, { answer });
+
   } catch (error) {
-    console.error('Error processing request:', error);
+    console.error('Error processing query request:', error);
     const errorMessage = error instanceof Error ? error.message : 'An internal server error occurred.';
-    yield yieldError(errorMessage);
+    return createResponse(500, { message: errorMessage });
   }
 };
