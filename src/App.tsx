@@ -117,15 +117,18 @@ interface ContextPanelProps {
   onFileParse: (file: File) => void;
   onRestart: () => void;
   onDeleteFile: (fileName: string) => void;
+  onSummarize: () => void;
   context: string;
   setContext: (context: string) => void;
   uploadedFiles: UploadedFile[];
   isParsing: boolean;
+  isSummarizing: boolean;
+  statusMessage: string;
 }
 
 const ContextPanel: React.FC<ContextPanelProps> = ({ 
-  onFileParse, onRestart, onDeleteFile, context, setContext,
-  uploadedFiles, isParsing 
+  onFileParse, onRestart, onDeleteFile, onSummarize, context, setContext,
+  uploadedFiles, isParsing, isSummarizing, statusMessage
 }) => {
   const [isDragging, setIsDragging] = useState(false);
 
@@ -182,10 +185,16 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
           />
         </div>
         
-        {isParsing && (
+        {(isParsing || isSummarizing) && (
             <div className="flex items-center justify-center p-2 text-slate-400 text-sm">
                 <div className="w-3 h-3 bg-slate-500 rounded-full animate-pulse [animation-delay:-0.3s] mr-2"></div>
-                Parsing file...
+                {isParsing ? 'Parsing file...' : 'Summarizing context...'}
+            </div>
+        )}
+        
+        {statusMessage && (
+             <div className="p-3 mb-3 bg-green-900/50 border border-green-600 rounded-lg text-center text-sm text-green-300">
+                {statusMessage}
             </div>
         )}
 
@@ -195,6 +204,13 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
               <p className="text-sm font-medium text-slate-300">
                 Loaded Documents ({uploadedFiles.length})
               </p>
+              <button 
+                onClick={onSummarize}
+                disabled={isParsing || isSummarizing}
+                className="text-sm text-indigo-400 hover:text-indigo-300 disabled:text-slate-500 disabled:cursor-not-allowed"
+              >
+                Summarize
+              </button>
             </div>
             
              <div className="space-y-2 mb-3 max-h-28 overflow-y-auto pr-2">
@@ -221,7 +237,7 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
 
       <button
         onClick={onRestart}
-        disabled={isParsing}
+        disabled={isParsing || isSummarizing}
         className="mt-6 w-full bg-indigo-600 text-white font-semibold py-3 px-4 rounded-lg hover:bg-indigo-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-indigo-500 shadow-lg"
       >
         Restart Session
@@ -238,12 +254,21 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isParsing, setIsParsing] = useState<boolean>(false);
+  const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
+  const [statusMessage, setStatusMessage] = useState<string>('');
   const [input, setInput] = useState<string>('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   
   const scrollToBottom = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+  
+  useEffect(() => {
+    if (statusMessage) {
+      const timer = setTimeout(() => setStatusMessage(''), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [statusMessage]);
 
   useEffect(() => {
     scrollToBottom();
@@ -260,6 +285,7 @@ function App() {
         return;
     }
     setIsParsing(true);
+    setStatusMessage('');
     
     let extractedText = '';
     try {
@@ -299,7 +325,42 @@ function App() {
     setCompanyContext('');
     setUploadedFiles([]);
     setMessages([]);
+    setStatusMessage('');
   };
+
+  const handleSummarize = async () => {
+    if (!companyContext.trim() || isSummarizing) return;
+    setIsSummarizing(true);
+    setStatusMessage('');
+
+    try {
+      const response = await fetch('/.netlify/functions/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: companyContext }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Summarization failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      if (data.summary) {
+        setMessages([]); // Critical: Reset chat for a clean start
+        setCompanyContext(data.summary);
+        setUploadedFiles([{ name: `Summary of ${uploadedFiles.length} document(s)`, content: data.summary }]);
+        setStatusMessage('Context summarized successfully!');
+      } else {
+        throw new Error('Received an empty summary from the server.');
+      }
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : 'An unknown error occurred.';
+      alert(`Summarization Error: ${errorMessage}`);
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
@@ -331,7 +392,7 @@ function App() {
             // Ignore if body isn't JSON
         }
         if (response.status === 502 || response.status === 504) {
-           errorText = "The request timed out. This can happen with very large documents. Please try reducing the context size or using a smaller file.";
+           errorText = "The request timed out. This can happen with very large documents. Please try reducing the context size by using the 'Summarize' button.";
         }
         throw new Error(errorText);
       }
@@ -358,10 +419,13 @@ function App() {
         onFileParse={handleFileParse}
         onRestart={handleRestart}
         onDeleteFile={handleDeleteFile}
+        onSummarize={handleSummarize}
         context={companyContext}
         setContext={setCompanyContext}
         uploadedFiles={uploadedFiles}
         isParsing={isParsing}
+        isSummarizing={isSummarizing}
+        statusMessage={statusMessage}
       />
       <div className="flex-1 flex flex-col h-full bg-slate-100">
         <header className="bg-white p-4 border-b border-slate-200 z-10">
