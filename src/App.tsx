@@ -306,7 +306,7 @@ function App() {
     setUploadedFiles(prev => prev.filter(file => file.name !== fileNameToDelete));
   };
   
-  const handleStartChat = async (context: string) => {
+  const handleStartChat = async () => {
     setError(null);
     setMessages([]);
     setIsLoading(true);
@@ -315,7 +315,7 @@ function App() {
         const response = await fetch('/.netlify/functions/gemini', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: 'START_CHAT_SESSION', context }),
+            body: JSON.stringify({ message: 'START_CHAT_SESSION' }),
         });
         
         if (!response.ok) {
@@ -337,7 +337,6 @@ function App() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         
-        // The start chat response is a single JSON object.
         const { value, done } = await reader.read();
         if (done) throw new Error('Stream ended prematurely when starting session.');
 
@@ -375,16 +374,27 @@ function App() {
     if (!input.trim() || isLoading || !sessionId) return;
 
     const userMessage: Message = { role: Role.User, content: input };
+    const isFirstMessage = messages.length === 1 && messages[0].role === Role.Model;
+
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
     setError(null);
     
     try {
+        const requestBody: { message: string; sessionId: string; context?: string } = {
+            message: input,
+            sessionId,
+        };
+
+        if (isFirstMessage) {
+            requestBody.context = companyContext;
+        }
+
         const response = await fetch('/.netlify/functions/gemini', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: input, sessionId }),
+            body: JSON.stringify(requestBody),
         });
 
         if (!response.ok) {
@@ -415,7 +425,7 @@ function App() {
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
-            buffer = lines.pop() || ''; // Keep the last, possibly incomplete line
+            buffer = lines.pop() || '';
 
             for (const line of lines) {
                 if (line.trim() === '') continue;
