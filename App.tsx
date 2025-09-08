@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Message, Role } from './types';
 
@@ -320,12 +319,27 @@ function App() {
             body: JSON.stringify({ message: 'START_CHAT_SESSION', context }),
         });
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'Failed to start chat session.');
+        if (!response.body) {
+            throw new Error('The response from the server is empty.');
         }
 
-        const { sessionId: newSessionId, message: initialMessage } = await response.json();
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        // The "start chat" response is a single JSON object, so we read once.
+        const { value, done } = await reader.read();
+
+        if (done) {
+            throw new Error('The server closed the connection unexpectedly.');
+        }
+
+        const responseText = decoder.decode(value);
+        const responseData = JSON.parse(responseText);
+
+        if (!response.ok) {
+            throw new Error(responseData.error || 'Failed to start chat session.');
+        }
+
+        const { sessionId: newSessionId, message: initialMessage } = responseData;
         setSessionId(newSessionId);
         setMessages([{ role: Role.Model, content: initialMessage }]);
 
@@ -363,8 +377,15 @@ function App() {
             body: JSON.stringify({ message: input, sessionId }),
         });
 
-        if (!response.ok || !response.body) {
-            const errorData = await response.json();
+        if (!response.body) {
+            throw new Error('The response from the server is empty.');
+        }
+        
+        if (!response.ok) {
+            const reader = response.body.getReader();
+            const { value } = await reader.read();
+            const errorText = new TextDecoder().decode(value);
+            const errorData = JSON.parse(errorText);
             throw new Error(errorData.error || `Request failed with status ${response.status}`);
         }
 
