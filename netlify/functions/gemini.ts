@@ -1,18 +1,18 @@
-import { GoogleGenAI, Chat } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import type { HandlerEvent, HandlerContext } from "@netlify/functions";
+import type { Part } from '@google/genai';
 
-// A persistent store for chat sessions, mapping a unique ID to a Chat instance.
-const chatSessions = new Map<string, Chat>();
+// Interface for messages sent from the client's history
+interface HistoryMessage {
+  role: 'user' | 'model';
+  content: string;
+}
 
-// Helper function to create a unique session ID
-const createSessionId = () => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+const yieldError = (message: string) => {
+    return JSON.stringify({ type: 'error', message }) + '\n';
+};
 
 export const handler = async function* (event: HandlerEvent, context: HandlerContext) {
-
-  const yieldError = (message: string) => {
-    return JSON.stringify({ type: 'error', message }) + '\n';
-  };
-
   if (event.httpMethod !== 'POST') {
     yield yieldError('Method Not Allowed');
     return;
@@ -26,58 +26,45 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
   
   try {
     const body = JSON.parse(event.body || '{}');
-    const { message, context: companyContext, sessionId } = body;
+    const { message, context: companyContext, history: clientHistory } = body;
 
-    if (typeof message !== 'string') {
-        yield yieldError('Message must be a string.');
+    if (typeof message !== 'string' || !message) {
+        yield yieldError('Message must be a non-empty string.');
         return;
     }
 
-    // --- Handle starting a new session ---
-    if (message === 'START_CHAT_SESSION') {
-        const newSessionId = createSessionId();
-        
-        const initialMessage = `I am ready to discuss risk management and strategic planning. How can I assist you?`;
-        
-        yield JSON.stringify({
-            type: 'session',
-            sessionId: newSessionId,
-            message: initialMessage,
-        }) + '\n';
-        return; // End execution for this request.
-    }
-    
-    // --- Handle sending a message to an existing/new session ---
-    if (!sessionId) {
-        yield yieldError('Session ID is missing. Please start a new chat.');
+    if (!Array.isArray(clientHistory)) {
+        yield yieldError('History must be an array.');
         return;
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    let chat = chatSessions.get(sessionId);
+    
+    const systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. When provided with context, you must use it to tailor your responses. All your responses should be formatted in markdown.`;
+    
+    // Reconstruct history for the API, converting from the client's format.
+    const history: { role: 'user' | 'model'; parts: Part[] }[] = [];
 
-    // Lazy initialization: If chat doesn't exist, create it now with the context from this request.
-    if (!chat) {
-        const systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. When provided with context, you must use it to tailor your responses. All your responses should be formatted in markdown.`;
-        
-        const history = [];
-        if (companyContext) {
-            history.push(
-                { role: 'user', parts: [{ text: `CONTEXT:\n${companyContext}` }] },
-                { role: 'model', parts: [{ text: 'Context acknowledged. I will refer to it in my responses.' }] }
-            );
-        }
-
-        chat = ai.chats.create({
-            model: 'gemini-2.5-flash',
-            history,
-            config: { systemInstruction },
-        });
-        
-        chatSessions.set(sessionId, chat);
+    // Prepend context if it exists (only on the first message from the user)
+    if (companyContext) {
+        history.push(
+            { role: 'user', parts: [{ text: `CONTEXT:\n${companyContext}` }] },
+            { role: 'model', parts: [{ text: 'Context acknowledged. I will refer to it in my responses.' }] }
+        );
     }
 
-    // Now that we're sure we have a chat instance, send the message.
+    // Add the rest of the chat history from the client
+    clientHistory.forEach((msg: HistoryMessage) => {
+        history.push({ role: msg.role, parts: [{ text: msg.content }] });
+    });
+
+    const chat = ai.chats.create({
+        model: 'gemini-2.5-flash',
+        history,
+        config: { systemInstruction },
+    });
+
+    // Send the user's new message and stream the response
     const stream = await chat.sendMessageStream({ message });
 
     for await (const chunk of stream) {
