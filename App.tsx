@@ -115,7 +115,7 @@ const FileDropzone: React.FC<FileDropzoneProps> = ({ onFileChange, isDragging, h
 
 interface ContextPanelProps {
   onFileParse: (file: File) => void;
-  onStartChat: (context: string) => void;
+  onStartChat: () => void;
   onClearContext: () => void;
   onDeleteFile: (fileName: string) => void;
   context: string;
@@ -228,7 +228,7 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
       </div>
 
       <button
-        onClick={() => onStartChat(context)}
+        onClick={onStartChat}
         disabled={isParsing}
         className="mt-6 w-full bg-indigo-600 text-white font-semibold py-3 px-4 rounded-lg hover:bg-indigo-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-indigo-500 shadow-lg"
       >
@@ -244,7 +244,6 @@ function App() {
   const [companyContext, setCompanyContext] = useState<string>('');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -306,75 +305,28 @@ function App() {
     setUploadedFiles(prev => prev.filter(file => file.name !== fileNameToDelete));
   };
   
-  const handleStartChat = async () => {
+  const handleStartChat = () => {
     setError(null);
-    setMessages([]);
-    setIsLoading(true);
-
-    try {
-        const response = await fetch('/.netlify/functions/gemini', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: 'START_CHAT_SESSION' }),
-        });
-        
-        if (!response.ok) {
-            let errorText = `Server error: ${response.status} ${response.statusText}`;
-            try {
-                const bodyText = await response.text();
-                const errorData = JSON.parse(bodyText);
-                if (errorData && errorData.type === 'error' && errorData.message) {
-                    errorText = errorData.message;
-                }
-            } catch (e) {
-                // Failed to parse body, stick with the status error
-            }
-            throw new Error(errorText);
-        }
-
-        if (!response.body) throw new Error('The response from the server is empty.');
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        
-        const { value, done } = await reader.read();
-        if (done) throw new Error('Stream ended prematurely when starting session.');
-
-        const chunk = decoder.decode(value);
-        const data = JSON.parse(chunk);
-
-        if (data.type === 'session') {
-            setSessionId(data.sessionId);
-            setMessages([{ role: Role.Model, content: data.message }]);
-        } else if (data.type === 'error') {
-            throw new Error(data.message);
-        } else {
-            throw new Error('Unexpected response type from server during session start.');
-        }
-
-    } catch (e) {
-        console.error(e);
-        const startChatError = e instanceof Error ? e.message : 'An unexpected error occurred.';
-        setError(startChatError);
-        setMessages([]);
-    } finally {
-        setIsLoading(false);
-    }
+    setMessages([
+        {
+            role: Role.Model,
+            content: "I am ready to discuss risk management and strategic planning. How can I assist you?",
+        },
+    ]);
   };
 
   const handleClearContext = () => {
     setCompanyContext('');
     setUploadedFiles([]);
     setMessages([]);
-    setSessionId(null);
     setError(null);
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || !sessionId) return;
+    if (!input.trim() || isLoading || messages.length === 0) return;
 
     const userMessage: Message = { role: Role.User, content: input };
-    const isFirstMessage = messages.length === 1 && messages[0].role === Role.Model;
+    const isFirstUserMessage = messages.length === 1 && messages[0].role === Role.Model;
 
     setMessages(prev => [...prev, userMessage]);
     setInput('');
@@ -382,14 +334,16 @@ function App() {
     setError(null);
     
     try {
-        const requestBody: { message: string; sessionId: string; context?: string } = {
-            message: input,
-            sessionId,
-        };
+        // The API history should not include the initial bot greeting.
+        // It should only contain the real back-and-forth conversation.
+        const historyForApi = isFirstUserMessage ? [] : messages.slice(1);
 
-        if (isFirstMessage) {
-            requestBody.context = companyContext;
-        }
+        const requestBody = {
+            message: input,
+            history: historyForApi.map(({ role, content }) => ({ role, content })),
+            // Only send the context on the very first user message of the session.
+            context: isFirstUserMessage ? companyContext : undefined,
+        };
 
         const response = await fetch('/.netlify/functions/gemini', {
             method: 'POST',
@@ -401,9 +355,14 @@ function App() {
             let errorText = `Server error: ${response.status} ${response.statusText}`;
             try {
                 const bodyText = await response.text();
-                const errorData = JSON.parse(bodyText);
-                if (errorData && errorData.type === 'error' && errorData.message) {
-                    errorText = errorData.message;
+                // Netlify's gateway error for timeouts is often not JSON
+                if (response.status === 502 || response.status === 504) {
+                    errorText = "The request timed out. This can happen with very large documents. Please try reducing the context size or rephrasing the question.";
+                } else {
+                    const errorData = JSON.parse(bodyText);
+                    if (errorData && errorData.type === 'error' && errorData.message) {
+                        errorText = errorData.message;
+                    }
                 }
             } catch (e) {
                 // Failed to parse body, stick with the status error
@@ -467,7 +426,7 @@ function App() {
         context={companyContext}
         setContext={setCompanyContext}
         uploadedFiles={uploadedFiles}
-        isChatting={!!sessionId}
+        isChatting={messages.length > 0}
         isParsing={isParsing}
       />
       <div className="flex-1 flex flex-col h-full bg-slate-100">
@@ -512,11 +471,11 @@ function App() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                placeholder={sessionId ? "Ask a follow-up question..." : "Please start a chat using the side panel."}
+                placeholder={messages.length > 0 ? "Ask a follow-up question..." : "Please start a chat using the side panel."}
                 className="flex-1 bg-transparent border-none focus:outline-none px-3 text-slate-800 placeholder-slate-400"
-                disabled={!sessionId || isLoading}
+                disabled={messages.length === 0 || isLoading}
               />
-              <button onClick={handleSend} disabled={!sessionId || isLoading || !input.trim()} className="p-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-slate-400 disabled:cursor-not-allowed transition-colors">
+              <button onClick={handleSend} disabled={messages.length === 0 || isLoading || !input.trim()} className="p-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-slate-400 disabled:cursor-not-allowed transition-colors">
                 <SendIcon className="w-5 h-5" />
               </button>
             </div>
