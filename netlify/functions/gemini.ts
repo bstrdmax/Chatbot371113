@@ -3,6 +3,8 @@ import type { HandlerEvent, HandlerContext } from "@netlify/functions";
 
 // A persistent store for chat sessions, mapping a unique ID to a Chat instance.
 const chatSessions = new Map<string, Chat>();
+// A temporary store for context before a chat is fully initialized with the first message.
+const contextStore = new Map<string, string>();
 
 // Helper function to create a unique session ID
 const createSessionId = () => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -26,26 +28,55 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
   
   try {
     const body = JSON.parse(event.body || '{}');
-    const { message, context: companyContext, sessionId: existingSessionId } = body;
-    let sessionId = existingSessionId;
-    let chat: Chat | undefined;
+    const { message, context: companyContext, sessionId } = body;
 
     if (typeof message !== 'string') {
         yield yieldError('Message must be a string.');
         return;
     }
 
-    const ai = new GoogleGenAI({ apiKey });
+    // --- Handle starting a new session ---
+    if (message === 'START_CHAT_SESSION') {
+        const newSessionId = createSessionId();
+        
+        // Temporarily store the context. The chat object will be created on the first message.
+        if (companyContext) {
+            contextStore.set(newSessionId, companyContext);
+        }
+
+        const initialMessage = companyContext
+            ? `Context has been loaded. I am ready to discuss risk management and strategic planning for your organization. How can I assist you?`
+            : `I am ready to discuss general risk management and strategic planning. How can I assist you?`;
+        
+        yield JSON.stringify({
+            type: 'session',
+            sessionId: newSessionId,
+            message: initialMessage,
+        }) + '\n';
+        return; // End execution for this request.
+    }
     
-    if (message === 'START_CHAT_SESSION' || !sessionId || !chatSessions.has(sessionId)) {
+    // --- Handle sending a message to an existing/new session ---
+    if (!sessionId) {
+        yield yieldError('Session ID is missing. Please start a new chat.');
+        return;
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    let chat = chatSessions.get(sessionId);
+
+    // Lazy initialization: If chat doesn't exist, create it now with the stored context.
+    if (!chat) {
         const systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. When provided with context, you must use it to tailor your responses. All your responses should be formatted in markdown.`;
         
         const history = [];
-        if (companyContext) {
+        const initialContext = contextStore.get(sessionId);
+        if (initialContext) {
             history.push(
-                { role: 'user', parts: [{ text: `CONTEXT:\n${companyContext}` }] },
+                { role: 'user', parts: [{ text: `CONTEXT:\n${initialContext}` }] },
                 { role: 'model', parts: [{ text: 'Context acknowledged. I will refer to it in my responses.' }] }
             );
+            contextStore.delete(sessionId); // Clean up context after use to save memory.
         }
 
         chat = ai.chats.create({
@@ -54,28 +85,10 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
             config: { systemInstruction },
         });
         
-        sessionId = createSessionId();
         chatSessions.set(sessionId, chat);
-
-        const initialMessage = companyContext
-            ? `Context has been loaded. I am ready to discuss risk management and strategic planning for your organization. How can I assist you?`
-            : `I am ready to discuss general risk management and strategic planning. How can I assist you?`;
-        
-        yield JSON.stringify({
-            type: 'session',
-            sessionId,
-            message: initialMessage,
-        }) + '\n';
-        return;
-
-    } 
-    
-    chat = chatSessions.get(sessionId);
-    if (!chat) {
-        yield yieldError('Chat session not found. Please start a new chat.');
-        return;
     }
 
+    // Now that we're sure we have a chat instance, send the message.
     const stream = await chat.sendMessageStream({ message });
 
     for await (const chunk of stream) {
