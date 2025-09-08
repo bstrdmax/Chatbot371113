@@ -334,11 +334,14 @@ function App() {
     setError(null);
     
     try {
-        const historyForApi = messages.map(({ role, content }) => ({ role, content }));
+        // The API history should not include the initial bot greeting.
+        // It should only contain the real back-and-forth conversation.
+        const historyForApi = isFirstUserMessage ? [] : messages.slice(1);
 
         const requestBody = {
             message: input,
-            history: historyForApi,
+            history: historyForApi.map(({ role, content }) => ({ role, content })),
+            // Only send the context on the very first user message of the session.
             context: isFirstUserMessage ? companyContext : undefined,
         };
 
@@ -352,9 +355,14 @@ function App() {
             let errorText = `Server error: ${response.status} ${response.statusText}`;
             try {
                 const bodyText = await response.text();
-                const errorData = JSON.parse(bodyText);
-                if (errorData && errorData.type === 'error' && errorData.message) {
-                    errorText = errorData.message;
+                // Netlify's gateway error for timeouts is often not JSON
+                if (response.status === 502 || response.status === 504) {
+                    errorText = "The request timed out. This can happen with very large documents. Please try reducing the context size or rephrasing the question.";
+                } else {
+                    const errorData = JSON.parse(bodyText);
+                    if (errorData && errorData.type === 'error' && errorData.message) {
+                        errorText = errorData.message;
+                    }
                 }
             } catch (e) {
                 // Failed to parse body, stick with the status error
