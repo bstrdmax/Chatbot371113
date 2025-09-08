@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI } from '@google/ai';
 import type { Handler, HandlerResponse } from "@netlify/functions";
 
 const createResponse = (statusCode: number, body: object): HandlerResponse => ({
@@ -27,13 +27,13 @@ export const handler: Handler = async (event, context) => {
 
     const ai = new GoogleGenAI({ apiKey });
 
-    const prompt = `Please act as an expert document analyst. Your task is to create a concise summary of the following text for a risk management expert.
+    const prompt = `You are an expert document analyst. Create a concise summary of the following text for a risk management expert.
 
 **Instructions:**
-1.  Extract **only** the most critical information: key risks, strategic goals, core financial data, and major stakeholders mentioned.
-2.  The summary **must be dense, factual, and under 1500 words.**
-3.  The purpose of this summary is to be used as context for a chatbot, so it must be significantly shorter than the original.
-4.  Omit all conversational fluff, introductions, and conclusions that don't add factual value.
+1.  Extract **only** the most critical information: key risks, strategic goals, core financial data, and major stakeholders.
+2.  The summary **must be extremely dense, factual, and under 800 words.**
+3.  The purpose of this summary is to be used as fast, efficient context for a chatbot. It must be significantly shorter than the original.
+4.  Omit all conversational fluff, introductions, and conclusions that don't add factual value. Get straight to the key points.
 
 DOCUMENT TEXT:
 ---
