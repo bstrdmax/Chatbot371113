@@ -8,7 +8,6 @@ const chatSessions = new Map<string, Chat>();
 const createSessionId = () => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
 export const handler = async function* (event: HandlerEvent, context: HandlerContext) {
-  const encoder = new TextEncoder();
 
   const yieldError = (message: string) => {
     return JSON.stringify({ type: 'error', message }) + '\n';
@@ -39,15 +38,19 @@ export const handler = async function* (event: HandlerEvent, context: HandlerCon
     const ai = new GoogleGenAI({ apiKey });
     
     if (message === 'START_CHAT_SESSION' || !sessionId || !chatSessions.has(sessionId)) {
-        let systemInstruction: string;
-        if (companyContext) {
-            systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. You must use the following information to tailor your responses:\n\n--- CONTEXT INFORMATION ---\n${companyContext}\n--- END CONTEXT INFORMATION ---\n\nWhen answering user questions, always consider this context. Your responses should be formatted in markdown.`;
-        } else {
-            systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. You will act as a general expert. Your responses should be formatted in markdown.`;
-        }
+        const systemInstruction = `You are an expert AI assistant specializing in risk management and strategic planning. Your answers should be professional, insightful, and actionable. When provided with context, you must use it to tailor your responses. All your responses should be formatted in markdown.`;
         
+        const history = [];
+        if (companyContext) {
+            history.push(
+                { role: 'user', parts: [{ text: `CONTEXT:\n${companyContext}` }] },
+                { role: 'model', parts: [{ text: 'Context acknowledged. I will refer to it in my responses.' }] }
+            );
+        }
+
         chat = ai.chats.create({
             model: 'gemini-2.5-flash',
+            history,
             config: { systemInstruction },
         });
         
