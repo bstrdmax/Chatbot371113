@@ -125,11 +125,12 @@ interface ContextPanelProps {
   isChatting: boolean;
   isParsing: boolean;
   isSummarizing: boolean;
+  summaryStatus: string;
 }
 
 const ContextPanel: React.FC<ContextPanelProps> = ({ 
   onFileParse, onStartChat, onClearContext, onSummarizeContext, onDeleteFile, 
-  context, setContext, uploadedFiles, isChatting, isParsing, isSummarizing
+  context, setContext, uploadedFiles, isChatting, isParsing, isSummarizing, summaryStatus
 }) => {
   const [isDragging, setIsDragging] = useState(false);
 
@@ -191,6 +192,12 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
                 <div className="w-3 h-3 bg-slate-500 rounded-full animate-pulse [animation-delay:-0.3s] mr-2"></div>
                 {isParsing ? 'Parsing file...' : 'Summarizing context...'}
             </div>
+        )}
+        
+        {summaryStatus && (
+           <div className={`text-center p-2 mb-2 rounded-md text-sm ${summaryStatus.includes('failed') ? 'bg-red-900/50 text-red-300' : 'bg-green-900/50 text-green-300'}`}>
+               {summaryStatus}
+           </div>
         )}
 
         {uploadedFiles.length > 0 && (
@@ -258,6 +265,7 @@ function App() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
+  const [summaryStatus, setSummaryStatus] = useState<string>('');
   const [input, setInput] = useState<string>('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   
@@ -280,6 +288,7 @@ function App() {
         return;
     }
     setIsParsing(true);
+    setSummaryStatus('');
     
     let extractedText = '';
     try {
@@ -314,6 +323,7 @@ function App() {
   const handleSummarizeContext = async () => {
     if (!companyContext || isSummarizing) return;
     setIsSummarizing(true);
+    setSummaryStatus('');
     try {
         const response = await fetch('/.netlify/functions/summarize', {
             method: 'POST',
@@ -332,15 +342,17 @@ function App() {
             name: `Summary of ${originalFileCount} document(s)`, 
             content: summary 
         }]);
-        // Reset the chat as the context has fundamentally changed
-        setMessages([]);
-        alert('Context summarized successfully! You can now start a new chat with the summarized information.');
+        
+        // Automatically start a new chat with the summarized context
+        handleStartChat();
+        setSummaryStatus('Context summarized successfully!');
 
     } catch (e) {
         const errorMessage = e instanceof Error ? e.message : 'An unknown error occurred during summarization.';
-        alert(`Summarization failed: ${errorMessage}`);
+        setSummaryStatus(`Summarization failed: ${errorMessage}`);
     } finally {
         setIsSummarizing(false);
+        setTimeout(() => setSummaryStatus(''), 5000); // Clear status message after 5 seconds
     }
   };
 
@@ -361,6 +373,7 @@ function App() {
     setCompanyContext('');
     setUploadedFiles([]);
     setMessages([]);
+    setSummaryStatus('');
   };
 
   const handleSend = async () => {
@@ -468,6 +481,7 @@ function App() {
         isChatting={messages.length > 0}
         isParsing={isParsing}
         isSummarizing={isSummarizing}
+        summaryStatus={summaryStatus}
       />
       <div className="flex-1 flex flex-col h-full bg-slate-100">
         <header className="bg-white p-4 border-b border-slate-200 z-10">
