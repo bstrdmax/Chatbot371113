@@ -115,19 +115,17 @@ const FileDropzone: React.FC<FileDropzoneProps> = ({ onFileChange, isDragging, h
 
 interface ContextPanelProps {
   onFileParse: (file: File) => void;
-  onStartChat: () => void;
-  onClearContext: () => void;
+  onRestart: () => void;
   onDeleteFile: (fileName: string) => void;
   context: string;
   setContext: (context: string) => void;
   uploadedFiles: UploadedFile[];
-  isChatting: boolean;
   isParsing: boolean;
 }
 
 const ContextPanel: React.FC<ContextPanelProps> = ({ 
-  onFileParse, onStartChat, onClearContext, onDeleteFile, context, setContext,
-  uploadedFiles, isChatting, isParsing 
+  onFileParse, onRestart, onDeleteFile, context, setContext,
+  uploadedFiles, isParsing 
 }) => {
   const [isDragging, setIsDragging] = useState(false);
 
@@ -170,7 +168,7 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
         <h2 className="text-xl font-bold">Context</h2>
       </div>
       <p className="text-sm text-slate-400 mb-6">
-        {context ? "Review or edit the combined text from your documents below." : "Upload documents to provide context. You can also start a general chat."}
+        Upload documents to ask questions about them.
       </p>
       
       <div className="flex-grow flex flex-col min-h-0">
@@ -197,12 +195,6 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
               <p className="text-sm font-medium text-slate-300">
                 Loaded Documents ({uploadedFiles.length})
               </p>
-              <button
-                onClick={onClearContext}
-                className="text-xs text-slate-400 hover:text-red-400 transition-colors underline"
-              >
-                Clear All
-              </button>
             </div>
             
              <div className="space-y-2 mb-3 max-h-28 overflow-y-auto pr-2">
@@ -228,11 +220,11 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
       </div>
 
       <button
-        onClick={onStartChat}
+        onClick={onRestart}
         disabled={isParsing}
         className="mt-6 w-full bg-indigo-600 text-white font-semibold py-3 px-4 rounded-lg hover:bg-indigo-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-indigo-500 shadow-lg"
       >
-        {isChatting ? 'Restart Chat' : 'Start Chat'}
+        Restart Session
       </button>
     </div>
   );
@@ -303,102 +295,57 @@ function App() {
     setUploadedFiles(prev => prev.filter(file => file.name !== fileNameToDelete));
   };
   
-  const handleStartChat = () => {
-    setMessages([
-        {
-            role: Role.Model,
-            content: "I am ready to discuss risk management and strategic planning. How can I assist you?",
-        },
-    ]);
-  };
-
-  const handleClearContext = () => {
+  const handleRestart = () => {
     setCompanyContext('');
     setUploadedFiles([]);
     setMessages([]);
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || messages.length === 0) return;
+    if (!input.trim() || isLoading) return;
 
     const userMessage: Message = { role: Role.User, content: input };
-    const isFirstUserMessage = messages.length === 1 && messages[0].role === Role.Model;
-
     setMessages(prev => [...prev, userMessage]);
+    const currentInput = input;
     setInput('');
     setIsLoading(true);
     
     try {
-        // The API history should not include the initial bot greeting.
-        const historyForApi = isFirstUserMessage ? [] : messages.slice(1);
+      if (!companyContext.trim()) {
+        throw new Error("Please upload a document to provide context before asking a question.");
+      }
+      
+      const response = await fetch('/.netlify/functions/gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: currentInput,
+          context: companyContext,
+        }),
+      });
 
-        const requestBody = {
-            message: input,
-            history: historyForApi.map(({ role, content }) => ({ role, content })),
-            // Only send the context on the very first user message of the session.
-            context: isFirstUserMessage ? companyContext : undefined,
-        };
-
-        const response = await fetch('/.netlify/functions/gemini', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody),
-        });
-
-        if (!response.ok) {
-            let errorText = `Server error: ${response.status} ${response.statusText}`;
-            try {
-                const bodyText = await response.text();
-                // Netlify's gateway error for timeouts is often not JSON
-                if (response.status === 502 || response.status === 504) {
-                    errorText = "The request timed out. This can happen with very large documents. Please try reducing the context size or rephrasing the question.";
-                } else {
-                    const errorData = JSON.parse(bodyText);
-                    if (errorData && errorData.type === 'error' && errorData.message) {
-                        errorText = errorData.message;
-                    }
-                }
-            } catch (e) {
-                // Failed to parse body, stick with the status error
+      if (!response.ok) {
+        let errorText = `Server error: ${response.status} ${response.statusText}`;
+        try {
+            const errorData = await response.json();
+            if (errorData && errorData.message) {
+                 errorText = errorData.message;
             }
-            throw new Error(errorText);
+        } catch (e) {
+            // Ignore if body isn't JSON
         }
-        
-        if (!response.body) throw new Error('The response from the server is empty.');
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let modelResponse = '';
-        setMessages(prev => [...prev, { role: Role.Model, content: '' }]);
-        let buffer = '';
-
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-                if (line.trim() === '') continue;
-                try {
-                    const data = JSON.parse(line);
-                    if (data.type === 'chunk') {
-                        modelResponse += data.text;
-                        setMessages(prev => {
-                            const newMessages = [...prev];
-                            newMessages[newMessages.length - 1].content = modelResponse;
-                            return newMessages;
-                        });
-                    } else if (data.type === 'error') {
-                        throw new Error(data.message);
-                    }
-                } catch (e) {
-                    console.error("Failed to parse stream line:", line, e);
-                }
-            }
+        if (response.status === 502 || response.status === 504) {
+           errorText = "The request timed out. This can happen with very large documents. Please try reducing the context size or using a smaller file.";
         }
+        throw new Error(errorText);
+      }
+      
+      const data = await response.json();
+      if (data.answer) {
+        setMessages(prev => [...prev, { role: Role.Model, content: data.answer }]);
+      } else {
+        throw new Error('Received an empty answer from the server.');
+      }
 
     } catch (e) {
       console.error(e);
@@ -413,18 +360,16 @@ function App() {
     <div className="flex h-screen bg-white font-sans antialiased">
       <ContextPanel
         onFileParse={handleFileParse}
-        onStartChat={handleStartChat}
-        onClearContext={handleClearContext}
+        onRestart={handleRestart}
         onDeleteFile={handleDeleteFile}
         context={companyContext}
         setContext={setCompanyContext}
         uploadedFiles={uploadedFiles}
-        isChatting={messages.length > 0}
         isParsing={isParsing}
       />
       <div className="flex-1 flex flex-col h-full bg-slate-100">
         <header className="bg-white p-4 border-b border-slate-200 z-10">
-          <h1 className="text-xl font-bold text-slate-800 text-center">ERM Risk Chatbot</h1>
+          <h1 className="text-xl font-bold text-slate-800 text-center">ERM Risk Q&A</h1>
         </header>
 
         <main className="flex-1 overflow-y-auto p-6">
@@ -432,14 +377,14 @@ function App() {
             {messages.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full text-center text-slate-500 mt-16">
                 <BotIcon className="w-24 h-24 mb-4 text-slate-400"/>
-                <h2 className="text-2xl font-semibold text-slate-700">Welcome!</h2>
-                <p className="max-w-md mt-2">Press 'Start Chat' to begin. Optionally, upload document(s) first to provide specific context for our discussion.</p>
+                <h2 className="text-2xl font-semibold text-slate-700">Document Q&A Assistant</h2>
+                <p className="max-w-md mt-2">Upload one or more documents using the side panel, then ask a question about their content below.</p>
               </div>
             )}
             {messages.map((msg, index) => (
               <ChatMessage key={index} message={msg} />
             ))}
-            {isLoading && messages[messages.length -1]?.role === Role.User && (
+            {isLoading && (
                <div className="flex items-start gap-3 my-5 justify-start">
                   <BotIcon className="w-8 h-8 text-slate-500 flex-shrink-0" />
                   <div className="p-4 rounded-2xl max-w-2xl bg-white border border-slate-200 shadow-sm rounded-tl-none">
@@ -463,11 +408,11 @@ function App() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                placeholder={messages.length > 0 ? "Ask a follow-up question..." : "Please start a chat using the side panel."}
+                placeholder={uploadedFiles.length > 0 ? "Ask a question about the documents..." : "Please upload a document to begin."}
                 className="flex-1 bg-transparent border-none focus:outline-none px-3 text-slate-800 placeholder-slate-400"
-                disabled={messages.length === 0 || isLoading}
+                disabled={uploadedFiles.length === 0 || isLoading}
               />
-              <button onClick={handleSend} disabled={messages.length === 0 || isLoading || !input.trim()} className="p-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-slate-400 disabled:cursor-not-allowed transition-colors">
+              <button onClick={handleSend} disabled={uploadedFiles.length === 0 || isLoading || !input.trim()} className="p-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-slate-400 disabled:cursor-not-allowed transition-colors">
                 <SendIcon className="w-5 h-5" />
               </button>
             </div>
