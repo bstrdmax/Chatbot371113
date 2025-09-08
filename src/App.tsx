@@ -317,9 +317,22 @@ function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: 'START_CHAT_SESSION', context }),
         });
+        
+        if (!response.ok) {
+            let errorText = `Server error: ${response.status} ${response.statusText}`;
+            try {
+                const bodyText = await response.text();
+                const errorData = JSON.parse(bodyText);
+                if (errorData && errorData.type === 'error' && errorData.message) {
+                    errorText = errorData.message;
+                }
+            } catch (e) {
+                // Failed to parse body, stick with the status error
+            }
+            throw new Error(errorText);
+        }
 
         if (!response.body) throw new Error('The response from the server is empty.');
-        if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -374,8 +387,21 @@ function App() {
             body: JSON.stringify({ message: input, sessionId }),
         });
 
+        if (!response.ok) {
+            let errorText = `Server error: ${response.status} ${response.statusText}`;
+            try {
+                const bodyText = await response.text();
+                const errorData = JSON.parse(bodyText);
+                if (errorData && errorData.type === 'error' && errorData.message) {
+                    errorText = errorData.message;
+                }
+            } catch (e) {
+                // Failed to parse body, stick with the status error
+            }
+            throw new Error(errorText);
+        }
+        
         if (!response.body) throw new Error('The response from the server is empty.');
-        if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
