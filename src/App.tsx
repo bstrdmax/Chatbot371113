@@ -97,7 +97,6 @@ const FileDropzone: React.FC<FileDropzoneProps> = ({ onFileChange, isDragging, h
       onDragOver={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-// Fix: Corrected typo from `fileInput` to `fileInputRef` to properly reference the file input element.
       onClick={() => fileInputRef.current?.click()}
     >
       <input
@@ -241,20 +240,6 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
 
 // --- Main App Component ---
 
-// Helper function to read the entire stream to completion
-async function readStreamToString(stream: ReadableStream<Uint8Array>): Promise<string> {
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    let content = '';
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-            return content;
-        }
-        content += decoder.decode(value);
-    }
-}
-
 function App() {
   const [companyContext, setCompanyContext] = useState<string>('');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -333,27 +318,27 @@ function App() {
             body: JSON.stringify({ message: 'START_CHAT_SESSION', context }),
         });
 
-        if (!response.body) {
-            throw new Error('The response from the server is empty.');
+        if (!response.body) throw new Error('The response from the server is empty.');
+        if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        // The start chat response is a single JSON object.
+        const { value, done } = await reader.read();
+        if (done) throw new Error('Stream ended prematurely when starting session.');
+
+        const chunk = decoder.decode(value);
+        const data = JSON.parse(chunk);
+
+        if (data.type === 'session') {
+            setSessionId(data.sessionId);
+            setMessages([{ role: Role.Model, content: data.message }]);
+        } else if (data.type === 'error') {
+            throw new Error(data.message);
+        } else {
+            throw new Error('Unexpected response type from server during session start.');
         }
-
-        const responseText = await readStreamToString(response.body);
-
-        if (!response.ok) {
-            try {
-                // Try to parse error response as JSON, as the function might send one
-                const errorData = JSON.parse(responseText);
-                throw new Error(errorData.error || 'Failed to start chat session.');
-            } catch (e) {
-                // If parsing fails, the raw text is the error
-                throw new Error(responseText || 'Failed to start chat session.');
-            }
-        }
-
-        const responseData = JSON.parse(responseText);
-        const { sessionId: newSessionId, message: initialMessage } = responseData;
-        setSessionId(newSessionId);
-        setMessages([{ role: Role.Model, content: initialMessage }]);
 
     } catch (e) {
         console.error(e);
@@ -389,34 +374,41 @@ function App() {
             body: JSON.stringify({ message: input, sessionId }),
         });
 
-        if (!response.body) {
-            throw new Error('The response from the server is empty.');
-        }
-        
-        if (!response.ok) {
-            const errorText = await readStreamToString(response.body);
-            try {
-                const errorData = JSON.parse(errorText);
-                throw new Error(errorData.error || `Request failed with status ${response.status}`);
-            } catch (parseError) {
-                throw new Error(errorText || `Request failed with status ${response.status}`);
-            }
-        }
+        if (!response.body) throw new Error('The response from the server is empty.');
+        if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let modelResponse = '';
         setMessages(prev => [...prev, { role: Role.Model, content: '' }]);
+        let buffer = '';
 
         while (true) {
             const { value, done } = await reader.read();
             if (done) break;
-            modelResponse += decoder.decode(value, { stream: true });
-            setMessages(prev => {
-                const newMessages = [...prev];
-                newMessages[newMessages.length - 1].content = modelResponse;
-                return newMessages;
-            });
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep the last, possibly incomplete line
+
+            for (const line of lines) {
+                if (line.trim() === '') continue;
+                try {
+                    const data = JSON.parse(line);
+                    if (data.type === 'chunk') {
+                        modelResponse += data.text;
+                        setMessages(prev => {
+                            const newMessages = [...prev];
+                            newMessages[newMessages.length - 1].content = modelResponse;
+                            return newMessages;
+                        });
+                    } else if (data.type === 'error') {
+                        throw new Error(data.message);
+                    }
+                } catch (e) {
+                    console.error("Failed to parse stream line:", line, e);
+                }
+            }
         }
 
     } catch (e) {
