@@ -241,6 +241,20 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
 
 // --- Main App Component ---
 
+// Helper function to read the entire stream to completion
+async function readStreamToString(stream: ReadableStream<Uint8Array>): Promise<string> {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let content = '';
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            return content;
+        }
+        content += decoder.decode(value);
+    }
+}
+
 function App() {
   const [companyContext, setCompanyContext] = useState<string>('');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -323,22 +337,20 @@ function App() {
             throw new Error('The response from the server is empty.');
         }
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        // The "start chat" response is a single JSON object, so we read once.
-        const { value, done } = await reader.read();
-
-        if (done) {
-            throw new Error('The server closed the connection unexpectedly.');
-        }
-
-        const responseText = decoder.decode(value);
-        const responseData = JSON.parse(responseText);
+        const responseText = await readStreamToString(response.body);
 
         if (!response.ok) {
-            throw new Error(responseData.error || 'Failed to start chat session.');
+            try {
+                // Try to parse error response as JSON, as the function might send one
+                const errorData = JSON.parse(responseText);
+                throw new Error(errorData.error || 'Failed to start chat session.');
+            } catch (e) {
+                // If parsing fails, the raw text is the error
+                throw new Error(responseText || 'Failed to start chat session.');
+            }
         }
 
+        const responseData = JSON.parse(responseText);
         const { sessionId: newSessionId, message: initialMessage } = responseData;
         setSessionId(newSessionId);
         setMessages([{ role: Role.Model, content: initialMessage }]);
@@ -382,11 +394,13 @@ function App() {
         }
         
         if (!response.ok) {
-            const reader = response.body.getReader();
-            const { value } = await reader.read();
-            const errorText = new TextDecoder().decode(value);
-            const errorData = JSON.parse(errorText);
-            throw new Error(errorData.error || `Request failed with status ${response.status}`);
+            const errorText = await readStreamToString(response.body);
+            try {
+                const errorData = JSON.parse(errorText);
+                throw new Error(errorData.error || `Request failed with status ${response.status}`);
+            } catch (parseError) {
+                throw new Error(errorText || `Request failed with status ${response.status}`);
+            }
         }
 
         const reader = response.body.getReader();
