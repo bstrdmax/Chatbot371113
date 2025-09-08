@@ -97,7 +97,6 @@ const FileDropzone: React.FC<FileDropzoneProps> = ({ onFileChange, isDragging, h
       onDragOver={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-// Fix: Corrected typo from `fileInput` to `fileInputRef` to properly reference the file input element.
       onClick={() => fileInputRef.current?.click()}
     >
       <input
@@ -307,7 +306,7 @@ function App() {
     setUploadedFiles(prev => prev.filter(file => file.name !== fileNameToDelete));
   };
   
-  const handleStartChat = async (context: string) => {
+  const handleStartChat = async () => {
     setError(null);
     setMessages([]);
     setIsLoading(true);
@@ -316,32 +315,42 @@ function App() {
         const response = await fetch('/.netlify/functions/gemini', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: 'START_CHAT_SESSION', context }),
+            body: JSON.stringify({ message: 'START_CHAT_SESSION' }),
         });
-
-        if (!response.body) {
-            throw new Error('The response from the server is empty.');
+        
+        if (!response.ok) {
+            let errorText = `Server error: ${response.status} ${response.statusText}`;
+            try {
+                const bodyText = await response.text();
+                const errorData = JSON.parse(bodyText);
+                if (errorData && errorData.type === 'error' && errorData.message) {
+                    errorText = errorData.message;
+                }
+            } catch (e) {
+                // Failed to parse body, stick with the status error
+            }
+            throw new Error(errorText);
         }
+
+        if (!response.body) throw new Error('The response from the server is empty.');
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
-        // The "start chat" response is a single JSON object, so we read once.
+        
         const { value, done } = await reader.read();
+        if (done) throw new Error('Stream ended prematurely when starting session.');
 
-        if (done) {
-            throw new Error('The server closed the connection unexpectedly.');
+        const chunk = decoder.decode(value);
+        const data = JSON.parse(chunk);
+
+        if (data.type === 'session') {
+            setSessionId(data.sessionId);
+            setMessages([{ role: Role.Model, content: data.message }]);
+        } else if (data.type === 'error') {
+            throw new Error(data.message);
+        } else {
+            throw new Error('Unexpected response type from server during session start.');
         }
-
-        const responseText = decoder.decode(value);
-        const responseData = JSON.parse(responseText);
-
-        if (!response.ok) {
-            throw new Error(responseData.error || 'Failed to start chat session.');
-        }
-
-        const { sessionId: newSessionId, message: initialMessage } = responseData;
-        setSessionId(newSessionId);
-        setMessages([{ role: Role.Model, content: initialMessage }]);
 
     } catch (e) {
         console.error(e);
@@ -365,44 +374,77 @@ function App() {
     if (!input.trim() || isLoading || !sessionId) return;
 
     const userMessage: Message = { role: Role.User, content: input };
+    const isFirstMessage = messages.length === 1 && messages[0].role === Role.Model;
+
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
     setError(null);
     
     try {
+        const requestBody: { message: string; sessionId: string; context?: string } = {
+            message: input,
+            sessionId,
+        };
+
+        if (isFirstMessage) {
+            requestBody.context = companyContext;
+        }
+
         const response = await fetch('/.netlify/functions/gemini', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: input, sessionId }),
+            body: JSON.stringify(requestBody),
         });
 
-        if (!response.body) {
-            throw new Error('The response from the server is empty.');
+        if (!response.ok) {
+            let errorText = `Server error: ${response.status} ${response.statusText}`;
+            try {
+                const bodyText = await response.text();
+                const errorData = JSON.parse(bodyText);
+                if (errorData && errorData.type === 'error' && errorData.message) {
+                    errorText = errorData.message;
+                }
+            } catch (e) {
+                // Failed to parse body, stick with the status error
+            }
+            throw new Error(errorText);
         }
         
-        if (!response.ok) {
-            const reader = response.body.getReader();
-            const { value } = await reader.read();
-            const errorText = new TextDecoder().decode(value);
-            const errorData = JSON.parse(errorText);
-            throw new Error(errorData.error || `Request failed with status ${response.status}`);
-        }
+        if (!response.body) throw new Error('The response from the server is empty.');
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let modelResponse = '';
         setMessages(prev => [...prev, { role: Role.Model, content: '' }]);
+        let buffer = '';
 
         while (true) {
             const { value, done } = await reader.read();
             if (done) break;
-            modelResponse += decoder.decode(value, { stream: true });
-            setMessages(prev => {
-                const newMessages = [...prev];
-                newMessages[newMessages.length - 1].content = modelResponse;
-                return newMessages;
-            });
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (line.trim() === '') continue;
+                try {
+                    const data = JSON.parse(line);
+                    if (data.type === 'chunk') {
+                        modelResponse += data.text;
+                        setMessages(prev => {
+                            const newMessages = [...prev];
+                            newMessages[newMessages.length - 1].content = modelResponse;
+                            return newMessages;
+                        });
+                    } else if (data.type === 'error') {
+                        throw new Error(data.message);
+                    }
+                } catch (e) {
+                    console.error("Failed to parse stream line:", line, e);
+                }
+            }
         }
 
     } catch (e) {
