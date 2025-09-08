@@ -117,17 +117,19 @@ interface ContextPanelProps {
   onFileParse: (file: File) => void;
   onStartChat: () => void;
   onClearContext: () => void;
+  onSummarizeContext: () => void;
   onDeleteFile: (fileName: string) => void;
   context: string;
   setContext: (context: string) => void;
   uploadedFiles: UploadedFile[];
   isChatting: boolean;
   isParsing: boolean;
+  isSummarizing: boolean;
 }
 
 const ContextPanel: React.FC<ContextPanelProps> = ({ 
-  onFileParse, onStartChat, onClearContext, onDeleteFile, context, setContext,
-  uploadedFiles, isChatting, isParsing 
+  onFileParse, onStartChat, onClearContext, onSummarizeContext, onDeleteFile, 
+  context, setContext, uploadedFiles, isChatting, isParsing, isSummarizing
 }) => {
   const [isDragging, setIsDragging] = useState(false);
 
@@ -184,10 +186,10 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
           />
         </div>
         
-        {isParsing && (
+        {(isParsing || isSummarizing) && (
             <div className="flex items-center justify-center p-2 text-slate-400 text-sm">
                 <div className="w-3 h-3 bg-slate-500 rounded-full animate-pulse [animation-delay:-0.3s] mr-2"></div>
-                Parsing file...
+                {isParsing ? 'Parsing file...' : 'Summarizing context...'}
             </div>
         )}
 
@@ -197,12 +199,21 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
               <p className="text-sm font-medium text-slate-300">
                 Loaded Documents ({uploadedFiles.length})
               </p>
-              <button
-                onClick={onClearContext}
-                className="text-xs text-slate-400 hover:text-red-400 transition-colors underline"
-              >
-                Clear All
-              </button>
+              <div className="flex items-center gap-3">
+                 <button
+                    onClick={onSummarizeContext}
+                    disabled={isSummarizing || isParsing}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors underline disabled:text-slate-500 disabled:cursor-wait"
+                  >
+                    Summarize
+                  </button>
+                <button
+                  onClick={onClearContext}
+                  className="text-xs text-slate-400 hover:text-red-400 transition-colors underline"
+                >
+                  Clear All
+                </button>
+              </div>
             </div>
             
              <div className="space-y-2 mb-3 max-h-28 overflow-y-auto pr-2">
@@ -229,7 +240,7 @@ const ContextPanel: React.FC<ContextPanelProps> = ({
 
       <button
         onClick={onStartChat}
-        disabled={isParsing}
+        disabled={isParsing || isSummarizing}
         className="mt-6 w-full bg-indigo-600 text-white font-semibold py-3 px-4 rounded-lg hover:bg-indigo-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-indigo-500 shadow-lg"
       >
         {isChatting ? 'Restart Chat' : 'Start Chat'}
@@ -246,7 +257,7 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isParsing, setIsParsing] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
   const [input, setInput] = useState<string>('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   
@@ -268,7 +279,6 @@ function App() {
         alert(`File "${file.name}" has already been uploaded.`);
         return;
     }
-    setError(null);
     setIsParsing(true);
     
     let extractedText = '';
@@ -295,9 +305,42 @@ function App() {
       setUploadedFiles(prev => [...prev, { name: file.name, content: extractedText }]);
     } catch (e) {
       const parseError = e instanceof Error ? e.message : 'An unknown error occurred during file parsing.';
-      setError(`Failed to parse file: ${parseError}`);
+      alert(`Failed to parse file: ${parseError}`);
     } finally {
       setIsParsing(false);
+    }
+  };
+
+  const handleSummarizeContext = async () => {
+    if (!companyContext || isSummarizing) return;
+    setIsSummarizing(true);
+    try {
+        const response = await fetch('/.netlify/functions/summarize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ context: companyContext }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || 'Failed to summarize context.');
+        }
+
+        const { summary } = await response.json();
+        const originalFileCount = uploadedFiles.length;
+        setUploadedFiles([{ 
+            name: `Summary of ${originalFileCount} document(s)`, 
+            content: summary 
+        }]);
+        // Reset the chat as the context has fundamentally changed
+        setMessages([]);
+        alert('Context summarized successfully! You can now start a new chat with the summarized information.');
+
+    } catch (e) {
+        const errorMessage = e instanceof Error ? e.message : 'An unknown error occurred during summarization.';
+        alert(`Summarization failed: ${errorMessage}`);
+    } finally {
+        setIsSummarizing(false);
     }
   };
 
@@ -306,7 +349,6 @@ function App() {
   };
   
   const handleStartChat = () => {
-    setError(null);
     setMessages([
         {
             role: Role.Model,
@@ -319,7 +361,6 @@ function App() {
     setCompanyContext('');
     setUploadedFiles([]);
     setMessages([]);
-    setError(null);
   };
 
   const handleSend = async () => {
@@ -331,11 +372,9 @@ function App() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
-    setError(null);
     
     try {
         // The API history should not include the initial bot greeting.
-        // It should only contain the real back-and-forth conversation.
         const historyForApi = isFirstUserMessage ? [] : messages.slice(1);
 
         const requestBody = {
@@ -357,7 +396,7 @@ function App() {
                 const bodyText = await response.text();
                 // Netlify's gateway error for timeouts is often not JSON
                 if (response.status === 502 || response.status === 504) {
-                    errorText = "The request timed out. This can happen with very large documents. Please try reducing the context size or rephrasing the question.";
+                    errorText = "The request timed out. This can happen with very large documents. Please try reducing the context size (using the 'Summarize' button) or rephrasing the question.";
                 } else {
                     const errorData = JSON.parse(bodyText);
                     if (errorData && errorData.type === 'error' && errorData.message) {
@@ -409,7 +448,6 @@ function App() {
     } catch (e) {
       console.error(e);
       const errorMessage = e instanceof Error ? e.message : 'Failed to get a response.';
-      setError(errorMessage);
        setMessages(prev => [...prev, { role: Role.Model, content: `Error: ${errorMessage}` }]);
     } finally {
       setIsLoading(false);
@@ -422,12 +460,14 @@ function App() {
         onFileParse={handleFileParse}
         onStartChat={handleStartChat}
         onClearContext={handleClearContext}
+        onSummarizeContext={handleSummarizeContext}
         onDeleteFile={handleDeleteFile}
         context={companyContext}
         setContext={setCompanyContext}
         uploadedFiles={uploadedFiles}
         isChatting={messages.length > 0}
         isParsing={isParsing}
+        isSummarizing={isSummarizing}
       />
       <div className="flex-1 flex flex-col h-full bg-slate-100">
         <header className="bg-white p-4 border-b border-slate-200 z-10">
@@ -458,7 +498,6 @@ function App() {
                   </div>
               </div>
             )}
-             {error && <p className="text-red-500 text-center my-4">Error: {error}</p>}
             <div ref={chatEndRef} />
           </div>
         </main>
